@@ -1,0 +1,33 @@
+intents:
+  - key: "weather_query"
+    patterns:
+      - "天气"
+      - "天气怎么样"
+      - "今天下雨吗"
+      - "明天.*天气"
+      - "weather"
+      - ".+天气"
+    params_extract:
+      - pattern: "(.+)天气"
+        group: 1
+        param_name: "city"
+      - pattern: ".*在(.+)的天气"
+        group: 1
+        param_name: "city"
+    action:
+      type: "api_call"
+      api_endpoint: "/internal/weather"
+      method: "GET"
+
+  - key: "news_query"
+    patterns:
+      - "最新新闻"
+      - "有什么消息"
+      - "news"
+    action:
+      type: "key_return"
+
+  - key: "general_chat"
+    patterns: []
+    action:
+      type: "llm_fallback"

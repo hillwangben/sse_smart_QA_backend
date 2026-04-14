@@ -1,0 +1,59 @@
+# LLM Provider Configuration
+# Supports: openai, anthropic, ollama (local), custom_api
+
+default_provider: "openai"
+
+providers:
+  # OpenAI API (GPT-4, GPT-4o, etc.)
+  openai:
+    enabled: false
+    api_type: "openai"
+    model: "gpt-4o"
+    api_key: "${OPENAI_API_KEY}"           # Environment variable reference
+    base_url: "https://api.openai.com/v1"  # Optional: custom endpoint
+    max_tokens: 1000
+    temperature: 0.7
+    timeout: 60
+
+  # Anthropic API (Claude 3, etc.)
+  anthropic:
+    enabled: false
+    api_type: "anthropic"
+    model: "claude-3-sonnet-20240229"
+    api_key: "${ANTHROPIC_API_KEY}"
+    base_url: "https://api.anthropic.com/v1"
+    max_tokens: 1000
+    temperature: 0.7
+    timeout: 60
+
+  # Ollama (Local LLM)
+  ollama:
+    enabled: false
+    api_type: "ollama"
+    model: "llama3"
+    api_key: ""                            # No API key for local
+    base_url: "http://localhost:11434/v1"
+    max_tokens: 1000
+    temperature: 0.7
+    timeout: 120
+
+  # Custom API (compatible with OpenAI format)
+  custom_api:
+    enabled: true
+    api_type: "openai"                    # Uses OpenAI-compatible format
+    model: "deepseek-chat"
+    api_key: "sk-53258aff72614728a09b7bb7b054e540"
+    base_url: "https://api.deepseek.com/v1"
+    max_tokens: 1000
+    temperature: 0.7
+    timeout: 60
+
+# Multimodal settings
+multimodal:
+  vision_model: "gpt-4o"                  # Model for image understanding
+  image_max_tokens: 1000
+
+# Context settings
+context:
+  max_history_messages: 20               # Maximum messages in context window
+  system_prompt: "You are a helpful AI assistant."

@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Q&A 智能问答</title>
+    <link rel="stylesheet" href="/static/chat.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Smart Q&A 智能问答</h1>
+            <div class="status">
+                <span id="connectionStatus" class="status-disconnected">未连接</span>
+                <span id="sessionId" class="session-id"></span>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <div class="sidebar">
+                <button id="newSessionBtn" class="btn btn-primary">新建会话</button>
+                <div class="session-list" id="sessionList"></div>
+            </div>
+
+            <div class="chat-area">
+                <div class="messages" id="messages"></div>
+
+                <div class="input-area">
+                    <div class="image-preview" id="imagePreview"></div>
+                    <div class="input-row">
+                        <button id="uploadImageBtn" class="btn btn-icon" title="上传图片">📷</button>
+                        <input type="file" id="imageInput" accept="image/*" style="display: none;">
+                        <textarea id="messageInput" placeholder="输入消息..." rows="1"></textarea>
+                        <button id="sendBtn" class="btn btn-send">发送</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentSessionId = null;
+        let eventSource = null;
+        let attachedImage = null;
+
+        const messagesEl = document.getElementById('messages');
+        const messageInput = document.getElementById('messageInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const newSessionBtn = document.getElementById('newSessionBtn');
+        const connectionStatus = document.getElementById('connectionStatus');
+        const sessionIdEl = document.getElementById('sessionId');
+        const sessionListEl = document.getElementById('sessionList');
+        const uploadImageBtn = document.getElementById('uploadImageBtn');
+        const imageInput = document.getElementById('imageInput');
+        const imagePreview = document.getElementById('imagePreview');
+
+        // Auto-resize textarea
+        messageInput.addEventListener('input', () => {
+            messageInput.style.height = 'auto';
+            messageInput.style.height = Math.min(messageInput.scrollHeight, 150) + 'px';
+        });
+
+        // Create new session
+        async function createSession() {
+            try {
+                console.log('Creating session...');
+                const resp = await fetch('/api/v1/session', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
+                console.log('Response status:', resp.status);
+                if (!resp.ok) {
+                    const text = await resp.text();
+                    console.error('Response error:', text);
+                    throw new Error(`HTTP ${resp.status}: ${resp.statusText}\n${text}`);
+                }
+                const data = await resp.json();
+                console.log('Session data:', data);
+                if (!data.session_id) {
+                    throw new Error('Invalid response: missing session_id');
+                }
+                currentSessionId = data.session_id;
+                sessionIdEl.textContent = `Session: ${currentSessionId.slice(0, 8)}...`;
+                messagesEl.innerHTML = '';
+                updateConnectionStatus('connected');
+                loadSessions();
+            } catch (e) {
+                console.error('Create session error:', e);
+                alert('创建会话失败: ' + e.message);
+            }
+        }
+
+        // Load session list
+        async function loadSessions() {
+            // For now, just show current session
+            sessionListEl.innerHTML = currentSessionId
+                ? `<div class="session-item active">${currentSessionId.slice(0, 8)}...</div>`
+                : '<div class="session-item">无会话</div>';
+        }
+
+        // Update connection status
+        function updateConnectionStatus(status) {
+            connectionStatus.className = status === 'connected' ? 'status-connected' : 'status-disconnected';
+            connectionStatus.textContent = status === 'connected' ? '已连接' : '未连接';
+        }
+
+        // Add message to chat
+        function addMessage(role, content, imageData = null) {
+            const div = document.createElement('div');
+            div.className = `message message-${role}`;
+
+            if (imageData) {
+                div.innerHTML = `<div class="message-content">${escapeHtml(content)}<img src="${imageData}" class="message-image"></div>`;
+            } else {
+                div.innerHTML = `<div class="message-content">${escapeHtml(content)}</div>`;
+            }
+
+            messagesEl.appendChild(div);
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+
+        // Escape HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Send message
+        async function sendMessage() {
+            const content = messageInput.value.trim();
+            if (!content && !attachedImage) return;
+            if (!currentSessionId) {
+                await createSession();
+            }
+
+            const multiMedia = attachedImage ? [{ type: 'image', url: attachedImage }] : [];
+
+            // Show user message immediately
+            addMessage('user', content, attachedImage);
+            messageInput.value = '';
+            messageInput.style.height = 'auto';
+            clearImage();
+
+            // Show typing indicator
+            const typingDiv = document.createElement('div');
+            typingDiv.className = 'message message-assistant typing';
+            typingDiv.innerHTML = '<div class="message-content">思考中...</div>';
+            messagesEl.appendChild(typingDiv);
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+
+            try {
+                const resp = await fetch('/api/v1/chat/stream', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: currentSessionId,
+                        content: content,
+                        multi_media: multiMedia
+                    })
+                });
+
+                // Remove typing indicator
+                typingDiv.remove();
+
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop();
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.slice(6));
+                                if (data.type === 'llm') {
+                                    addMessage('assistant', data.data.content);
+                                } else if (data.type === 'intent') {
+                                    addMessage('assistant', `意图匹配: ${data.intent_key}\n参数: ${JSON.stringify(data.params)}`);
+                                } else if (data.type === 'close') {
+                                    console.log('Stream completed');
+                                }
+                            } catch (e) {}
+                        }
+                    }
+                }
+            } catch (e) {
+                typingDiv.remove();
+                addMessage('assistant', '发送失败: ' + e.message);
+            }
+        }
+
+        // Handle image upload
+        uploadImageBtn.addEventListener('click', () => imageInput.click());
+
+        imageInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    attachedImage = e.target.result;
+                    imagePreview.innerHTML = `<img src="${attachedImage}"><button onclick="clearImage()">×</button>`;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        function clearImage() {
+            attachedImage = null;
+            imagePreview.innerHTML = '';
+            imageInput.value = '';
+        }
+
+        // Event listeners
+        sendBtn.addEventListener('click', sendMessage);
+        messageInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+        newSessionBtn.addEventListener('click', createSession);
+
+        // Auto-create session on load
+        createSession();
+    </script>
+</body>
+</html>
