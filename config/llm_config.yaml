@@ -1,5 +1,5 @@
 # LLM Provider Configuration
-# Supports: openai, anthropic, ollama (local), custom_api
+# Supports: openai, anthropic, ollama (local), vllm, custom_api
 
 default_provider: "openai"
 
@@ -36,6 +36,22 @@ providers:
     max_tokens: 1000
     temperature: 0.7
     timeout: 120
+
+  # vLLM (High-performance LLM serving)
+  # vLLM provides OpenAI-compatible API for efficient model serving
+  vllm:
+    enabled: false
+    api_type: "vllm"                       # Uses OpenAI-compatible format
+    model: "Qwen/Qwen2.5-7B-Instruct"      # Model name served by vLLM
+    api_key: ""                            # Optional: set if vLLM requires auth
+    base_url: "http://localhost:8000/v1"   # vLLM server endpoint
+    max_tokens: 1000
+    temperature: 0.7
+    timeout: 120
+    # vLLM specific options
+    top_p: 0.9
+    top_k: 50
+    repetition_penalty: 1.0
 
   # Custom API (compatible with OpenAI format)
   custom_api:

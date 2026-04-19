@@ -439,6 +439,244 @@ class OllamaProvider(LLMProvider):
         return response.choices[0].message.content or ""
 
 
+class VLLMProvider(LLMProvider):
+    """
+    vLLM 高性能 LLM 服务提供商实现。
+
+    vLLM 是高性能的大模型推理服务，支持多种开源模型（如 Llama、Qwen、Mistral 等）。
+    使用 OpenAI 兼容 API 接口进行调用，支持流式响应和多模态输入。
+
+    特性:
+    - 高吞吐量、低延迟的推理服务
+    - 支持多种开源模型
+    - OpenAI 兼容 API
+    - 支持流式响应
+    - 支持 vLLM 特有参数（top_k, repetition_penalty 等）
+
+    Attributes:
+        config (ProviderConfig): 提供商配置对象。
+        client (AsyncOpenAI): OpenAI 兼容的异步客户端实例。
+    """
+
+    def __init__(self, config: ProviderConfig):
+        """
+        初始化 vLLM 提供商。
+
+        Args:
+            config (ProviderConfig): 提供商配置，包含 base_url（如 http://localhost:8000/v1）、model 等。
+        """
+        super().__init__(config)
+        self.client = AsyncOpenAI(
+            api_key=self.config.api_key or "EMPTY",  # vLLM 本地部署通常不需要 API key
+            base_url=self.config.base_url,
+        )
+
+    def _build_messages(self, prompt: str, context: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+        """
+        构建 vLLM API 所需的消息格式。
+
+        将历史上下文与当前用户输入合并为完整的消息列表。
+
+        Args:
+            prompt (str): 当前用户输入的提示文本。
+            context (list[dict[str, Any]] | None): 对话历史上下文。
+
+        Returns:
+            list[dict[str, Any]]: OpenAI 兼容格式的消息列表。
+        """
+        messages = []
+        if context:
+            for msg in context:
+                messages.append({"role": msg["role"], "content": msg["content"]})
+        messages.append({"role": "user", "content": prompt})
+        return messages
+
+    def _get_extra_params(self) -> dict[str, Any]:
+        """
+        获取 vLLM 特有的额外参数。
+
+        从配置中提取 top_k、repetition_penalty 等参数。
+
+        Returns:
+            dict[str, Any]: vLLM 特有的参数字典。
+        """
+        extra = {}
+        # vLLM 支持额外的采样参数
+        if hasattr(self.config, 'top_k') and self.config.top_k:
+            extra['top_k'] = self.config.top_k
+        if hasattr(self.config, 'repetition_penalty') and self.config.repetition_penalty:
+            extra['repetition_penalty'] = self.config.repetition_penalty
+        if hasattr(self.config, 'top_p') and self.config.top_p:
+            extra['top_p'] = self.config.top_p
+        return extra
+
+    async def generate_text(self, prompt: str, context: list[dict[str, Any]] | None = None) -> str:
+        """
+        异步生成文本响应。
+
+        Args:
+            prompt (str): 用户输入的提示文本。
+            context (list[dict[str, Any]] | None): 对话历史上下文。
+
+        Returns:
+            str: 模型生成的文本响应，若生成失败则返回空字符串。
+        """
+        messages = self._build_messages(prompt, context)
+        extra_params = self._get_extra_params()
+        response = await self.client.chat.completions.create(
+            model=self.config.model,
+            messages=messages,
+            max_tokens=self.config.max_tokens,
+            temperature=self.config.temperature,
+            **extra_params,
+        )
+        return response.choices[0].message.content or ""
+
+    async def chat_stream(self, prompt: str, context: list[dict[str, Any]] | None = None):
+        """
+        异步流式生成对话响应。
+
+        Args:
+            prompt (str): 用户输入的提示文本。
+            context (list[dict[str, Any]] | None): 对话历史上下文。
+
+        Returns:
+            AsyncStream: OpenAI 兼容的流式响应对象。
+        """
+        messages = self._build_messages(prompt, context)
+        extra_params = self._get_extra_params()
+        return await self.client.chat.completions.create(
+            model=self.config.model,
+            messages=messages,
+            max_tokens=self.config.max_tokens,
+            temperature=self.config.temperature,
+            stream=True,
+            **extra_params,
+        )
+
+    async def generate_with_image(self, prompt: str, image_data: str) -> str:
+        """
+        基于图片和文本生成响应（多模态生成）。
+
+        使用 vLLM 支持的视觉模型（如 LLaVA、Qwen-VL）理解图片内容。
+
+        Args:
+            prompt (str): 用户输入的提示文本。
+            image_data (str): 图片数据，支持 base64 data URL 或图片 URL。
+
+        Returns:
+            str: 模型生成的文本响应，若生成失败则返回空字符串。
+        """
+        extra_params = self._get_extra_params()
+        response = await self.client.chat.completions.create(
+            model=self.config.model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": image_data}},
+                    ],
+                }
+            ],
+            max_tokens=self.config.max_tokens,
+            temperature=self.config.temperature,
+            **extra_params,
+        )
+        return response.choices[0].message.content or ""
+
+    def _build_messages(self, prompt: str, context: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+        """
+        构建 Ollama API 所需的消息格式。
+
+        将历史上下文与当前用户输入合并为完整的消息列表。
+
+        Args:
+            prompt (str): 当前用户输入的提示文本。
+            context (list[dict[str, Any]] | None): 对话历史上下文。
+
+        Returns:
+            list[dict[str, Any]]: OpenAI 兼容格式的消息列表。
+        """
+        messages = []
+        if context:
+            for msg in context:
+                messages.append({"role": msg["role"], "content": msg["content"]})
+        messages.append({"role": "user", "content": prompt})
+        return messages
+
+    async def generate_text(self, prompt: str, context: list[dict[str, Any]] | None = None) -> str:
+        """
+        异步生成文本响应。
+
+        Args:
+            prompt (str): 用户输入的提示文本。
+            context (list[dict[str, Any]] | None): 对话历史上下文。
+
+        Returns:
+            str: 模型生成的文本响应，若生成失败则返回空字符串。
+        """
+        messages = self._build_messages(prompt, context)
+        response = await self.client.chat.completions.create(
+            model=self.config.model,
+            messages=messages,
+            max_tokens=self.config.max_tokens,
+            temperature=self.config.temperature,
+        )
+        return response.choices[0].message.content or ""
+
+    async def chat_stream(self, prompt: str, context: list[dict[str, Any]] | None = None):
+        """
+        异步流式生成对话响应。
+
+        Args:
+            prompt (str): 用户输入的提示文本。
+            context (list[dict[str, Any]] | None): 对话历史上下文。
+
+        Returns:
+            AsyncStream: OpenAI 兼容的流式响应对象。
+        """
+        messages = self._build_messages(prompt, context)
+        return await self.client.chat.completions.create(
+            model=self.config.model,
+            messages=messages,
+            max_tokens=self.config.max_tokens,
+            temperature=self.config.temperature,
+            stream=True,
+        )
+
+    async def generate_with_image(self, prompt: str, image_data: str) -> str:
+        """
+        基于图片和文本生成响应（多模态生成）。
+
+        使用 LLaVA 等视觉模型理解图片内容并生成文本响应。
+        需要 Ollama 服务支持视觉模型（如 llava、bakllava 等）。
+
+        Args:
+            prompt (str): 用户输入的提示文本。
+            image_data (str): 图片数据，支持 base64 data URL 或图片 URL。
+
+        Returns:
+            str: 模型生成的文本响应，若生成失败则返回空字符串。
+        """
+        # Ollama 视觉模型支持（如 llava）
+        response = await self.client.chat.completions.create(
+            model=self.config.model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": image_data}},
+                    ],
+                }
+            ],
+            max_tokens=self.config.max_tokens,
+            temperature=self.config.temperature,
+        )
+        return response.choices[0].message.content or ""
+
+
 class LLMOrchestrator:
     """
     LLM 编排器 - 统一管理多模态 LLM 调用。
@@ -461,6 +699,7 @@ class LLMOrchestrator:
         "openai": OpenAIProvider,
         "anthropic": AnthropicProvider,
         "ollama": OllamaProvider,
+        "vllm": VLLMProvider,
     }
 
     def __init__(self):
